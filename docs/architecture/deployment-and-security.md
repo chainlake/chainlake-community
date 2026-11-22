@@ -43,3 +43,22 @@ Kubernetes（helm）镜像映射；任一 sidecar 缺失不得阻塞核心启动
 默认 deny 出站（allowlist 放行）；密钥不进日志/cell/产物；写操作必审批；
 审计 append-only；默认关闭项：Docker 沙箱宿主挂载、公开注册、SSE 外网暴露。
 首次部署检查清单随 P7 输出。
+
+## 附录：SaaS 多租户 Notebook（DEFERRED，不进社区实现）
+
+本节为 cloud/enterprise track 预留设计，社区版不实现。原则：
+**同 workspace 共享数据、不共享执行状态；不同 workspace 什么都不共享**。
+
+- 计算归属：kernel 粒度永远 per-user（独立变量空间与 DuckDB 内存）；共享的是数据、
+  定义与存储。Compute 增加 `scope: personal | workspace-shared | ephemeral`
+  （个人/共享池/定时一次性），spawner 按 scope 选 K8s 模板。
+- 同 workspace 协作分档：L1 隔离协作（默认，各自 kernel + 共享存储/git，可见彼此文件与产物）；
+  L2 在场感（光标/cell 锁）；L3 实时协同编辑（Yjs，明确延后）。
+- 跨 workspace 硬隔离：进程隔离（namespace/标签 + NetworkPolicy）；
+  存储隔离（独立卷/桶，不 cross-mount）；凭证隔离（别名按 workspace 注入）；
+  配额隔离（CPU/内存/并发 kernel 数/DuckDB `memory_limit`，超限熔断+审计）。
+- SaaS 运营：idle 回收（交互 30min、定时跑完即焚；warm pool 仅付费档）；
+  成本归属（run 记录记 workspace/user/compute/时长，用量计量归 cloud 仓）；
+  审计到会话级 + 查询级（cell 级不做）。
+- 共享引擎（Spark Connect 集群）：per-user session + fair 调度 + workspace 配额，
+  复用引擎原生机制。

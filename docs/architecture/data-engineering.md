@@ -21,6 +21,15 @@ notebook attach 的是 Compute（registry + session + 凭证发放 + idle 回收
 DuckDB 本地/远程、Spark Connect、Flink SQL Gateway 均为 Compute 实现。
 新增引擎 = 新实现 + 会话管理，Pipeline/Notebook 前端不动。
 
+## Compute 与执行引擎分工（已定案 DECIDED）
+
+- **notebook 交互层 = DuckDB in-process**：零进程启动开销、DataFrame 进程内共享、
+  延迟最低；WeKnora 现有 `data_analysis` 同构。覆盖即席查询、采样预览、小中量 Python 互通。
+- **pipeline 调度层 = Duckle runner**：子进程隔离（崩只死一个 run）、流式执行、
+  多核、锁死环境可复现；覆盖批量、定时、大吞吐。
+- **两层经 Parquet/共享存储换数据**：备数区为交换格式，Catalog 登记表位置；
+  notebook 与 pipeline 互引同一份表，不倒数据。
+
 ## 调度
 
 默认 Asynq 队列 + **新增**周期触发器（现状只有 datasource scheduler 与 automation trigger 的
