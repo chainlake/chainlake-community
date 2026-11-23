@@ -12,6 +12,7 @@ import { useI18n } from 'vue-i18n';
 import { sanitizeHTML, sanitizeMarkdownHTML, hydrateProtectedFileImages } from '@/utils/security';
 import { preparePptxPreview, isCompletePptxRender } from '@/utils/pptxPreview';
 import { findMarkdownSourceRange } from '@/utils/markdownSourceLocate';
+import ExcelParseWorker from './excel-parse.worker.ts?worker';
 import { renderDocumentPreviewMarkdown } from '@/utils/documentPreviewMarkdown';
 import {
   neutralizeRelativePreviewImages,
@@ -97,7 +98,6 @@ const blobUrl = ref('');
 const textContent = ref('');
 const highlightedCode = ref('');
 const markdownHtml = ref('');
-const excelHtml = ref('');
 const mermaidSource = ref<string | null>(null);
 let loadedMermaidBlob: Blob | undefined;
 const htmlViewMode = ref<'render' | 'source'>('render');
@@ -106,6 +106,23 @@ const pdfData = shallowRef<ArrayBuffer | null>(null);
 const epubHtml = ref('');
 let epubObjectUrls: string[] = [];
 let excelSheetNames: string[] = [];
+// Excel previews render page by page so a 10k-row table never blocks the UI:
+// the workbook is parsed once into AoA rows, then only the current page of
+// each sheet is mounted. Cell ids keep the SheetJS `sheet-{idx}-{COL}{ROW}`
+// shape with absolute row numbers so citation locating keeps working.
+const EXCEL_PAGE_SIZE = 100;
+interface ExcelSheetPreview {
+  name: string;
+  rows: string[][];
+  cols: number;
+  page: number;
+}
+const excelSheets = ref<ExcelSheetPreview[]>([]);
+// Excel-only render indicator: the shared `loading` flag must drop before the
+// switch so ref-mounted render targets (e.g. the docx container) exist when
+// their renderer runs. Excel parsing happens in a worker after that point,
+// so it tracks its own spinner to avoid a blank gap on large tables.
+const excelRendering = ref(false);
 let previewExt = '';
 let pptxSlideCount = 0;
 function onPptxRendered(result: unknown) {
@@ -299,12 +316,81 @@ function decodeCSVBlob(arrayBuffer: ArrayBuffer): string {
   return new TextDecoder('gbk').decode(bytes);
 }
 
+function excelColName(idx: number): string {
+  let name = '';
+  let i = idx;
+  do {
+    name = String.fromCharCode(65 + (i % 26)) + name;
+    i = Math.floor(i / 26) - 1;
+  } while (i >= 0);
+  return name;
+}
+
+function excelPageCount(sheet: ExcelSheetPreview): number {
+  return Math.max(1, Math.ceil(sheet.rows.length / EXCEL_PAGE_SIZE));
+}
+
+function excelPageRows(sheet: ExcelSheetPreview): Array<{ absRow: number; cells: string[] }> {
+  const start = sheet.page * EXCEL_PAGE_SIZE;
+  return sheet.rows
+    .slice(start, start + EXCEL_PAGE_SIZE)
+    .map((cells, i) => ({ absRow: start + i + 1, cells }));
+}
+
+function setExcelPage(sheetIdx: number, page: number) {
+  const sheet = excelSheets.value[sheetIdx];
+  if (!sheet) return;
+  sheet.page = Math.min(Math.max(0, page), excelPageCount(sheet) - 1);
+}
+
 async function renderExcel(blob: Blob, fileType?: string) {
+  const lowerType = fileType?.toLowerCase();
+  try {
+    const sheets = await parseExcelInWorker(blob, lowerType);
+    excelSheetNames = sheets.map((s) => s.name);
+    excelSheets.value = sheets.map((s) => ({ ...s, page: 0 }));
+  } catch (err) {
+    // Workers unavailable (or blocked): same parse, on the main thread.
+    console.warn('Excel worker parse failed, falling back to main thread:', err);
+    await parseExcelMainThread(blob, lowerType);
+  }
+}
+
+function parseExcelInWorker(blob: Blob, lowerType?: string): Promise<ExcelSheetPreview[]> {
+  return (async () => {
+    if (typeof Worker === 'undefined') throw new Error('Worker unavailable');
+    const worker = new ExcelParseWorker();
+    try {
+      const payload: { buffer?: ArrayBuffer; text?: string; fileType?: string } = { fileType: lowerType };
+      let transfer: Transferable[] | undefined;
+      if (lowerType === 'csv' || lowerType === 'tsv' || lowerType === 'tab') {
+        payload.text = decodeCSVBlob(await blob.arrayBuffer());
+      } else {
+        payload.buffer = await blob.arrayBuffer();
+        transfer = [payload.buffer];
+      }
+      const sheets = await new Promise<ExcelSheetPreview[]>((resolve, reject) => {
+        worker.onerror = (e: ErrorEvent) => reject(new Error(e.message || 'excel worker error'));
+        worker.onmessage = (e: MessageEvent) => {
+          const data = e.data || {};
+          if (data.error) reject(new Error(data.error));
+          else resolve((data.sheets || []) as ExcelSheetPreview[]);
+        };
+        if (transfer) worker.postMessage(payload, transfer);
+        else worker.postMessage(payload);
+      });
+      return sheets;
+    } finally {
+      worker.terminate();
+    }
+  })();
+}
+
+async function parseExcelMainThread(blob: Blob, lowerType?: string) {
   const XLSX = await import('xlsx');
   const arrayBuffer = await blob.arrayBuffer();
 
   let workbook;
-  const lowerType = fileType?.toLowerCase();
   if (lowerType === 'csv') {
     const csvText = decodeCSVBlob(arrayBuffer);
     workbook = XLSX.read(csvText, { type: 'string' });
@@ -316,18 +402,30 @@ async function renderExcel(blob: Blob, fileType?: string) {
   }
 
   excelSheetNames = [...workbook.SheetNames];
-  let html = '';
-  workbook.SheetNames.forEach((name, sheetIdx) => {
-    const sheet = workbook.Sheets[name];
-    const sheetHtml = XLSX.utils.sheet_to_html(sheet, { id: `sheet-${sheetIdx}` });
-    html += `<div class="excel-sheet">`;
-    if (workbook.SheetNames.length > 1) {
-      html += `<div class="excel-sheet-name">${name}</div>`;
+  const sheets: ExcelSheetPreview[] = workbook.SheetNames.map((name) => {
+    const ws = workbook.Sheets[name];
+    const rows: string[][] = [];
+    let cols = 0;
+    const ref = ws?.['!ref'];
+    if (ref) {
+      const range = XLSX.utils.decode_range(ref);
+      for (let r = range.s.r; r <= range.e.r; r++) {
+        const cells: string[] = [];
+        for (let c = range.s.c; c <= range.e.c; c++) {
+          const addr = XLSX.utils.encode_cell({ r, c });
+          const cell = ws[addr];
+          cells.push(cell ? String(cell.w ?? cell.v ?? '') : '');
+        }
+        cols = Math.max(cols, cells.length);
+        rows.push(cells);
+      }
+      rows.forEach((cells) => {
+        while (cells.length < cols) cells.push('');
+      });
     }
-    html += sheetHtml;
-    html += `</div>`;
+    return { name, rows, cols, page: 0 };
   });
-  excelHtml.value = sanitizeHTML(html);
+  excelSheets.value = sheets;
 }
 
 async function renderText(blob: Blob, fileType: string) {
@@ -576,7 +674,12 @@ async function loadPreview() {
         break;
       }
       case 'excel': {
-        await renderExcel(blob, ft);
+        excelRendering.value = true;
+        try {
+          await renderExcel(blob, ft);
+        } finally {
+          excelRendering.value = false;
+        }
         break;
       }
       case 'text': {
@@ -627,7 +730,8 @@ function cleanup() {
   textContent.value = '';
   highlightedCode.value = '';
   markdownHtml.value = '';
-  excelHtml.value = '';
+  excelSheets.value = [];
+  excelRendering.value = false;
   mermaidSource.value = null;
   loadedMermaidBlob = undefined;
   htmlViewMode.value = 'render';
@@ -820,6 +924,22 @@ function locateExcel(request: SourceLocateRequest): SourceLocateResult {
   const box = previewContent.value;
   if (!box) return NOT_FOUND;
   const locators = request.locators.filter((l) => l.type === 'sheet' && l.mapping === 'exact' && !l.partial && l.row_start);
+  // Paginated preview only mounts one page per sheet: jump to the page that
+  // holds the cited row first, then locate inside the mounted DOM on next tick.
+  const first = locators
+    .map((loc) => ({ loc, idx: loc.sheet ? excelSheetNames.indexOf(loc.sheet) : -1 }))
+    .find((x) => x.idx >= 0);
+  if (first) {
+    const sheet = excelSheets.value[first.idx];
+    if (sheet) {
+      const needPage = Math.max(0, Math.floor((((first.loc.row_start as number) || 1) - 1) / EXCEL_PAGE_SIZE));
+      if (sheet.page !== needPage) {
+        setExcelPage(first.idx, needPage);
+        void nextTick(() => { if (props.locate) applyLocate(); });
+        return { found: true, precise: false, granularity: 'block' };
+      }
+    }
+  }
   const targets: Element[] = [];
   for (const loc of locators) {
     const byName = loc.sheet ? excelSheetNames.indexOf(loc.sheet) : -1;
@@ -1069,8 +1189,33 @@ onUnmounted(() => {
     </div>
 
     <!-- Excel -->
-    <div v-else-if="previewType === 'excel' && excelHtml" class="preview-excel">
-      <div ref="previewContent" tabindex="0" :aria-label="fileName" class="excel-container" v-html="excelHtml" />
+    <div v-else-if="previewType === 'excel' && (excelSheets.length || excelRendering)" class="preview-excel">
+      <div v-if="excelRendering && !excelSheets.length" class="preview-loading">
+        <t-loading size="medium" />
+        <span class="loading-text">{{ $t('preview.loading') }}</span>
+      </div>
+      <div v-else ref="previewContent" tabindex="0" :aria-label="fileName" class="excel-container">
+        <div v-for="(sheet, sheetIdx) in excelSheets" :key="sheetIdx" class="excel-sheet">
+          <div v-if="excelSheets.length > 1" class="excel-sheet-name">{{ sheet.name }}</div>
+          <table :id="`sheet-${sheetIdx}`">
+            <tbody>
+              <tr v-for="row in excelPageRows(sheet)" :key="row.absRow">
+                <td v-for="(cell, colIdx) in row.cells" :key="colIdx" :id="`sheet-${sheetIdx}-${excelColName(colIdx)}${row.absRow}`">{{ cell }}</td>
+              </tr>
+            </tbody>
+          </table>
+          <div v-if="excelPageCount(sheet) > 1" class="excel-pager">
+            <t-pagination
+              :total="sheet.rows.length"
+              :page-size="EXCEL_PAGE_SIZE"
+              :current="sheet.page + 1"
+              size="small"
+              :show-jumper="false"
+              @current-change="(p: number) => setExcelPage(sheetIdx, p - 1)"
+            />
+          </div>
+        </div>
+      </div>
     </div>
 
     <!-- EPUB -->
@@ -1727,6 +1872,12 @@ onUnmounted(() => {
       overflow: hidden;
       text-overflow: ellipsis;
     }
+  }
+  .excel-pager {
+    display: flex;
+    justify-content: flex-end;
+    padding: 8px 16px;
+    border-bottom: 1px solid @border-color;
   }
 }
 </style>

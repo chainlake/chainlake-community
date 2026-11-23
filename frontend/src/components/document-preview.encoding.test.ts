@@ -5,7 +5,6 @@ import { fileURLToPath } from 'node:url'
 import { runInNewContext } from 'node:vm'
 import test from 'node:test'
 import { compileScript, parse } from '@vue/compiler-sfc'
-import { DOMParser } from '@xmldom/xmldom'
 import ts from 'typescript'
 import { createRenderer, h, ref } from 'vue'
 import * as filePreview from '../utils/filePreview'
@@ -77,9 +76,9 @@ for (const fileType of ['csv', 'tsv', 'tab']) {
         assert.equal(f.vm.error, '')
         assert.equal(f.vm.loading, false)
         assert.equal(f.vm.previewType, 'excel')
-        const doc = new DOMParser().parseFromString(f.vm.excelHtml, 'text/html')
-        const cells = Array.from(doc.getElementsByTagName('td'), cell => cell.textContent)
-        assert.deepEqual(cells, ['item', 'count', '蜡', '1'])
+        const sheets = JSON.parse(JSON.stringify(f.vm.excelSheets))
+        assert.equal(sheets.length, 1)
+        assert.deepEqual(sheets[0].rows, [['item', 'count'], ['蜡', '1']])
       } finally {
         f.close()
       }
