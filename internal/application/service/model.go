@@ -8,6 +8,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/google/uuid"
 	apperrors "github.com/Tencent/WeKnora/internal/errors"
 	"github.com/Tencent/WeKnora/internal/logger"
 	"github.com/Tencent/WeKnora/internal/models/asr"
@@ -101,6 +102,8 @@ func (s *modelService) resolveWeKnoraCloudCredentials(ctx context.Context, param
 func (s *modelService) CreateModel(ctx context.Context, model *types.Model) error {
 	logger.Infof(ctx, "Creating model: %s, type: %s, source: %s", model.Name, model.Type, model.Source)
 
+	s.ensureOpencodeSessionHeader(model)
+
 	// Handle remote models (e.g., OpenAI, Azure)
 	if model.Source == types.ModelSourceRemote {
 		logger.Info(ctx, "Remote model detected, setting status to active")
@@ -187,6 +190,7 @@ func (s *modelService) CopyModel(ctx context.Context, sourceID, displayName stri
 		Parameters:  params,
 	}
 	logger.Infof(ctx, "Copying model %s as %q", source.ID, displayName)
+	s.ensureOpencodeSessionHeader(model)
 
 	// Remote rows, and local rows that already finished downloading, are
 	// configuration copies. Only a local row that is not active needs a pull.
@@ -244,6 +248,38 @@ func cloneModelParameters(params types.ModelParameters) (types.ModelParameters, 
 		return types.ModelParameters{}, err
 	}
 	return cloned, nil
+}
+
+// ensureOpencodeSessionHeader auto-fills x-opencode-session for opencode.ai
+// Go subscription models. Manual values are preserved; only missing headers
+// are generated so the model works out of the box.
+func (s *modelService) ensureOpencodeSessionHeader(model *types.Model) {
+	if model == nil || model.Parameters.Provider != providers.OpencodeID {
+		return
+	}
+	baseURL := strings.TrimSpace(model.Parameters.BaseURL)
+	if baseURL == "" {
+		baseURL = providers.OpencodeGoBaseURL
+	}
+	if !strings.Contains(strings.ToLower(baseURL), "opencode.ai") {
+		return
+	}
+	if model.Parameters.CustomHeaders == nil {
+		model.Parameters.CustomHeaders = map[string]string{}
+	}
+	for k := range model.Parameters.CustomHeaders {
+		if strings.EqualFold(k, "x-opencode-session") && strings.TrimSpace(model.Parameters.CustomHeaders[k]) != "" {
+			return
+		}
+	}
+	// Preserve case if an empty key already exists.
+	for k := range model.Parameters.CustomHeaders {
+		if strings.EqualFold(k, "x-opencode-session") {
+			model.Parameters.CustomHeaders[k] = uuid.NewString()
+			return
+		}
+	}
+	model.Parameters.CustomHeaders["x-opencode-session"] = uuid.NewString()
 }
 
 // GetModelByID retrieves a model by its ID
@@ -361,6 +397,8 @@ func (s *modelService) UpdateModel(ctx context.Context, model *types.Model) erro
 		model.IsBuiltin = true
 		model.ManagedBy = ""
 	}
+
+	s.ensureOpencodeSessionHeader(model)
 
 	// Update model in repository
 	err = s.repo.Update(ctx, model)
