@@ -26,6 +26,7 @@ func Builtins() []*Definition {
 		newNovitaProvider(),
 		newNvidiaProvider(),
 		newOpenaiProvider(),
+		newOpencodeProvider(),
 		newOpenrouterProvider(),
 		newPineconeProvider(),
 		newQianfanProvider(),

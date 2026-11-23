@@ -34,6 +34,11 @@
 - T2：ParadeDB 版本漂移（compose v0.25.11 vs helm v0.18.9）。缓解：P7 前统一并回归。
 - T3：前端无 echarts，新增依赖增包体积。缓解：路由懒加载 + 按需引入。
 - T4：DuckDB in-process 资源尖峰。缓解：并发上限 + 大查询走远程引擎。
+- T5（2026-11-23 实证）：KnowledgeQA 回答预算取全局 `summary.max_completion_tokens`
+  默认值（曾为 1024），不随模型行/目录值变化（行级值只进 AgentQA 路径）。后果：
+  任何长回答或带推理的回答都可能撞上限 `length`。缓解：已将默认值提至 16384；
+  长期修复为将 `modelMaxOutputTokens` 接入 KnowledgeQA `prepareChatModel`
+ （需改上游文件，走 PATCHES 流程，P1 范畴）。
 
 ## 外部依赖风险
 
