@@ -30,3 +30,4 @@
 |---|---|---|---|---|---|
 | — | v0.9.0（基线） | — | — | — | fork 起点，无同步 |
 | 2026-11-23 | upstream/main @cf5306da8（基线之后 8 commits） | sync/weknora-20261123 | 0 | 全绿（go build/vet/单测/type-check/check-i18n） | 6 fix + 2 TOS 测试；与本地改动零文件重叠 |
+| 2026-11-23 | upstream/main @032c67f30（cf5306da8 之后 8 commits） | sync/weknora-20261123-2 | 0 | 全绿（主/cli/client 三模块 build+vet+单测/type-check/check-i18n+useHighlight） | 8 fix（client/knowledge/cli/search/mcp/telegram 等）；与本地改动零文件重叠 |
