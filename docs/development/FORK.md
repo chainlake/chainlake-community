@@ -29,3 +29,4 @@
 | 日期 | 上游版本 | 同步分支 | 冲突数 | 门禁 | 备注 |
 |---|---|---|---|---|---|
 | — | v0.9.0（基线） | — | — | — | fork 起点，无同步 |
+| 2026-11-23 | upstream/main @cf5306da8（基线之后 8 commits） | sync/weknora-20261123 | 0 | 全绿（go build/vet/单测/type-check/check-i18n） | 6 fix + 2 TOS 测试；与本地改动零文件重叠 |
