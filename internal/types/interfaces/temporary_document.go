@@ -24,6 +24,11 @@ type TemporaryDocumentRepository interface {
 type TemporaryDocumentService interface {
 	Create(ctx context.Context, tenantID uint64, sessionID, fileName, mimeType string, fileSize int64, reader io.Reader, options types.TemporaryDocumentCreateOptions) (*types.TemporaryDocument, error)
 	Get(ctx context.Context, tenantID uint64, sessionID, documentID string) (*types.TemporaryDocument, error)
+	// ResolveHandle maps the handle the model was shown (attachment://att_... or
+	// the bare att_... form) back to a document this session may read. A raw
+	// document ID is accepted as well. It returns a nil document, no error, when
+	// the handle names nothing in this conversation.
+	ResolveHandle(ctx context.Context, tenantID uint64, sessionID, handle string) (*types.TemporaryDocument, error)
 	OpenFile(ctx context.Context, tenantID uint64, sessionID, documentID string) (io.ReadCloser, string, error)
 	List(ctx context.Context, tenantID uint64, sessionID string) ([]*types.TemporaryDocument, error)
 	Delete(ctx context.Context, tenantID uint64, sessionID, documentID string) error

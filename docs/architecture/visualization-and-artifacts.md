@@ -11,12 +11,13 @@
 ## Agent 生成管线（Intent → Compiler → ECharts）
 
 ```
-NL → 选图(chart catalog taxonomy) → SLayer 编译 SQL → 执行采样
+NL → 选图(chart catalog taxonomy) → 语义层(SemanticCompiler) 编译 SQL → 执行采样
  → 生成 ChartIntent(约15字段, 枚举校验) → Compiler 展开 ECharts option
  → 预览 display_type=chart → 存 Dive(版本) → 迭代/分享/嵌入
 ```
 
-- Intent 与 SLayer measures/dims 同构；Compiler 承载主题/中文数字/日期轴/空态。
+- Intent 与 semantic member（metric/dimension，见 ADR-018）同构；Compiler 承载主题/中文数字/日期轴/空态。
+  Intent 只允许引用 semantic member，不得引用 KB 片段（ADR-019）。
 - 校验失败打回 Agent（附缺失字段），静默坏图不进渲染。
 - 多查询图用 `layers[]`；raw option 逃生舱默认关闭、需人工确认。
 - **渲染引擎唯一 ECharts**（Apache-2.0；前端当前无 echarts，需新增依赖，见 P5）。
@@ -24,6 +25,7 @@ NL → 选图(chart catalog taxonomy) → SLayer 编译 SQL → 执行采样
 
 ## 与 Artifact Registry 的关系
 
-Dive/Dashboard/Chart 定义与版本登记在 Artifact Registry（元数据+血缘）；
-渲染产物（图片/HTML 导出）为 artifact 字节存对象存储。Registry 不拥有图表语义，
-可视化域拥有 Spec 结构；两域以 artifact_id 互指，不 дубли元数据。
+Dive/Dashboard/Chart 定义与版本登记在 `artifacts` 表（ADR-013：workspace 级 + 不可变版本 +
+provenance）；渲染产物（图片/HTML 导出）的字节落在 `resources`（内容寻址去重），
+分享/嵌入用 `resource_access_grants`。Registry 不拥有图表语义，可视化域拥有 Spec 结构；
+两域以 `artifact_id` 互指，不重复存元数据。

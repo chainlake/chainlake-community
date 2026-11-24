@@ -399,7 +399,11 @@ func (s *sessionService) AgentQA(
 		// Stored documents are listed for read_file rather than pasted in;
 		// inline uploads without a stored document still carry their content.
 		if len(req.Attachments) > 0 {
-			agentQuery += req.Attachments.BuildAgentPrompt()
+			// A tabular upload in a turn that has data_analysis must be analysed
+			// through SQL, not tallied by hand from the text read_file returns.
+			agentQuery += req.Attachments.BuildAgentPrompt(types.AgentAttachmentPromptOptions{
+				DataAnalysisTool: slices.Contains(tools.EffectiveAllowedTools(agentConfig.AllowedTools), tools.ToolDataAnalysis),
+			})
 			logger.Infof(ctx, "Appended %d attachment(s) to agent query", len(req.Attachments))
 		}
 		if manifest := buildSandboxAttachmentsPrompt(stagedAttachments, layout); manifest != "" {

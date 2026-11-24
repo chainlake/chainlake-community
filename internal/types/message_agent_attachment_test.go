@@ -37,6 +37,21 @@ func TestBuildAgentPromptListsStoredDocumentsWithoutContent(t *testing.T) {
 	assert.NotContains(t, prompt, "doc-large", "the durable document ID must not reach the model")
 }
 
+func TestBuildAgentPromptRoutesTabularAttachmentsToDataAnalysis(t *testing.T) {
+	attachments := MessageAttachments{{
+		ID: "doc-csv", FileName: "sales.csv", FileType: ".csv",
+		ContentMode: AttachmentContentModeOnDemand,
+	}}
+
+	withTool := attachments.BuildAgentPrompt(AgentAttachmentPromptOptions{DataAnalysisTool: true})
+	assert.Contains(t, withTool, "data_analysis(attachment_id=<path>)")
+	assert.Contains(t, withTool, "instead of tallying rows")
+
+	// Without the tool the manifest must not name it: the model would call a
+	// function that does not exist in that turn.
+	assert.NotContains(t, attachments.BuildAgentPrompt(), "data_analysis")
+}
+
 func TestBuildAgentPromptInlinesOnlySmallFullContent(t *testing.T) {
 	prompt := MessageAttachments{
 		{ID: "small", FileName: "a.md", ContentMode: AttachmentContentModeFull, TokenCount: 100, Content: "small body"},

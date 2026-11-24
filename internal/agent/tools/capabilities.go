@@ -90,6 +90,9 @@ var ToolCapabilityRequirements = map[string]ToolRequirement{
 	// ---- Data analysis (reads table summary/column chunks from RAG ingest) ----
 	"data_analysis": {AnyOf: []KBCapability{CapVector, CapKeyword}, ConsumesFiles: true},
 	"data_schema":   {AnyOf: []KBCapability{CapVector, CapKeyword}, ConsumesFiles: true},
+	// save_chart only stores what the model already computed from a table, so
+	// it carries data_analysis's requirement and adds none of its own.
+	"save_chart": {AnyOf: []KBCapability{CapVector, CapKeyword}, ConsumesFiles: true},
 }
 
 // documentReaderRequirement: document readers work on stored chunks, which

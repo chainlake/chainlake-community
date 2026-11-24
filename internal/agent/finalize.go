@@ -302,7 +302,7 @@ func (e *AgentEngine) emitCompletionEvent(
 	}
 
 	data := event.AgentCompleteData{
-		Artifacts:       e.collaborationArtifacts(),
+		Artifacts:       mergeTurnArtifacts(e.collaborationArtifacts(), e.turnArtifacts),
 		FinalAnswer:     state.FinalAnswer,
 		KnowledgeRefs:   knowledgeRefsInterface,
 		AgentSteps:      steps,

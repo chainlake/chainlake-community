@@ -406,6 +406,13 @@ func (e *AgentEngine) emitToolOutcome(
 		result = &types.ToolResult{Success: false, Error: "no result"}
 	}
 
+	// A tool that persisted output itself (no sandbox involved) hands the
+	// artifact over here. It rides the same message-owned path a
+	// sandbox-collected file does, so the client renders one card shape.
+	if len(result.Artifacts) > 0 {
+		e.turnArtifacts = mergeTurnArtifacts(e.turnArtifacts, result.Artifacts)
+	}
+
 	e.eventBus.Emit(ctx, event.Event{
 		ID:        toolCall.ID + "-tool-result",
 		Type:      event.EventAgentToolResult,

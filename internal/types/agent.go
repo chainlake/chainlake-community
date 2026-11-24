@@ -403,6 +403,11 @@ type ToolResult struct {
 	// description of each for a chat model that cannot view them ("" when an
 	// image could not be described). Live only.
 	ImageDescriptions []string `json:"-"`
+	// Artifacts holds files the tool persisted itself, for tools that produce
+	// output without a sandbox. The engine folds them into the assistant
+	// message's artifact list at the end of the turn, so the client shows the
+	// same card a sandbox-collected file gets. Live only.
+	Artifacts MessageArtifacts `json:"-"`
 	// ImageDetail ("brief" or "full") and ImageFocus carry how closely the
 	// model asked to read Images when it cannot view them. Live only.
 	ImageDetail string `json:"-"`

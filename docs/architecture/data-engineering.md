@@ -32,9 +32,13 @@ DuckDB 本地/远程、Spark Connect、Flink SQL Gateway 均为 Compute 实现�
 
 ## 调度
 
-默认 Asynq 队列 + **新增**周期触发器（现状只有 datasource scheduler 与 automation trigger 的
-cron 模式可借鉴，`datasource/scheduler.go:35-96`；**通用 Asynq-periodic 不存在，需新建**）。
-K8s CronJob 为备选（重型场景）。notebook 定时跑、pipeline 定时跑共用同一触发器与 run 记录格式。
+**复用 automation 的调度内核，不新建触发器**：`application/service/automation_scheduler.go:23-79`
+已实现数据库驱动 cron（多实例 CAS 抢占、misfire/overlap 策略、lease 过期回收、queued run、
+运行记录与站内通知），且不依赖 Redis。P3 的做法是把该内核抽成通用 `Schedule / Run` 服务，
+automation / pipeline / notebook 共用同一套触发与 run 记录；`datasource/scheduler.go:35-96`
+是内存 robfig + Redis TaskID 去重（多实例同时触发靠去重兜底），**不再作为借鉴对象**。
+队列仍走 `types/task.go` 的 `queueDefinitions` 注册表（Pool/Weight/TaskTypes），不得裸 enqueue。
+K8s CronJob 为备选（重型场景）。
 
 ## 执行安全（4.7，所有执行面统一）
 
@@ -51,5 +55,7 @@ K8s CronJob 为备选（重型场景）。notebook 定时跑、pipeline 定时�
 5. **审计与清理**：每次执行记（谁/哪台 compute/跑了什么/耗时/行数）；idle 会话回收；
    workspace 删除级联清理（清单 P1 定稿，PENDING）。
 
-Jupyter Server 自身设计（认证票据/WS 代理/kernel 隔离/生命周期）见
-`identity-and-authorization.md` Quant；细节在 P1/P3 关闭前均为 PENDING，不得先写代码依赖。
+Jupyter Server 自身设计（认证票据/WS 代理/kernel 隔离/生命周期）在 P3 关闭前均为 PENDING，
+不得先写代码依赖。P3 可先用现有 `internal/sandbox`（docker/e2b/cube 三后端，含快照与 idle 回收）
+在容器内跑 `nbclient` / `nbconvert --execute`，把 Jupyter Server 降为**可选件**（ADR-012′），
+以避免被该 PENDING 阻塞。

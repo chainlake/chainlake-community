@@ -1,6 +1,7 @@
 # Resource, Catalog and Artifact Model
 
-状态：DECIDED（模型）/ 表实现为 PROPOSED（P0/P1）。日期：2026-11-22。
+状态：DECIDED（模型）/ Resource Registry 已由上游实现（见下注），Catalog 与 Artifact 表为
+PROPOSED（P0）。日期：2026-11-22；修订：2026-11-24。
 
 ## 三个注册表的职责切分（防重叠）
 
@@ -12,6 +13,14 @@
 
 同一物化数据集可同时是 Catalog 表（可发现）与 Artifact（有血缘），以**引用双挂**实现，
 禁止拷贝两份。
+
+> **实现现状（2026-11-24 核实）**：Resource Registry **不是新建项**。
+> `migrations/versioned/000069_resource_registry.up.sql` 已提供 `resources`（`content_hash`
+> 去重、handle、lifecycle/state）、`resource_bindings`（owner_type/owner_id/relation 引用计数）、
+> `resource_access_grants`（分享 token）；服务在 `application/service/resource.go`
+> （`Bind` / `Release` / `CreateAccessGrant` / `ResolveAccessGrant`）。
+> P0 只需三件事：① 新增 `owner_type=artifact` 常量参与引用计数；② 新建 `artifacts` 表（ADR-013）；
+> ③ 新建 Catalog 元数据表（catalogs / schemas / tables）。
 
 ## 统一资源模型（4.2/4.4）
 
@@ -27,13 +36,15 @@ Dashboards、Dives、Computes、Schedules。
 - Artifact：Agent/Notebook/Pipeline 产出（Query Result、Notebook、Pipeline Output、
   Knowledge Asset、Chart、Dashboard、Dive、Report），元数据模型见下。
 
-## Artifact 元数据模型（4.10）
+## Artifact 元数据模型（4.10，已由 ADR-013 定稿）
 
-`workspace_id, created_by, created_by_agent?, execution_id, source_resource_id?,
-artifact_type, schema_version, content_hash, storage_uri, version, status
-(draft/validated/published/deprecated), created_at, updated_at, provenance{run_id,
-inputs[], code_version, params}`。版本链不可变；状态机流转审计留痕；
-大对象禁入注册表（只记 URI + hash）。
+`artifacts` 表：`workspace_id, logical_id, version（UNIQUE(logical_id, version)）、
+artifact_type, status(draft/validated/published/deprecated), schema_version,
+resource_id（→ 上游 `resources`，字节层）, file_name/file_type/file_size,
+created_by, created_by_agent?, session_id?, message_artifact_id?（单向桥）,
+run_id?, inputs, code_version, params, deleted_at`。
+版本链不可变；状态机流转审计留痕；字节只存 `resources`（内容寻址 + 引用计数），
+注册表不存大对象；呈现层 `message_artifacts` 不改动。
 
 ## 双通道原则（Knowledge vs Data，4.4）
 

@@ -11,6 +11,12 @@ Source → Connector → Extraction → Transformation → Validation → Storag
 四路来源：文件（Volume/上传）、数据库（连接器采样/整表）、API（分页/增量键）、网页抓取
 （沿用 docreader 抓取 + SSRF allowlist，不另建抓取器）。
 
+> **命名边界（2026-11-24）**：本文件的"Connector"与上游 `internal/datasource/connector.go` 的
+> 文档源连接器（Feishu / Notion / Confluence 等，接口 `Validate / ListResources / FetchAll /
+> FetchIncremental(cursor)` + `StreamHandler` 逐条流式与检查点续传）不是同一个东西。
+> 文件与 API 类来源**沿用该接口并扩展 tabular 输出**；数据库来源另立 `DataConnector`
+> （库表发现、列类型/主键/时间戳采样、整表抽取、方言适配），避免同名不同义。
+
 ## 关键决策
 
 - **全量 vs 增量**：首次全量 + 主键/时间戳增量为默认；CDC **不是**初始必备能力
@@ -18,7 +24,8 @@ Source → Connector → Extraction → Transformation → Validation → Storag
 - **校验与检疫**：非空/类型/行数阈值；不过进 quarantine（状态可见、可重试、可废弃），不静默丢数。
 - **重试与恢复**：指数退避 + 死信记录；run 级幂等（重跑不重入）。
 - **Schema 演进**：新列加法兼容并版本化；破坏性变更建新版本表 + 通知订阅者（PENDING 细节，P2 定稿）。
-- **Provenance**：每次 ingest 登记 artifact（源 URI + hash + 转换版本 + run_id）。
+- **Provenance**：每次 ingest 登记 artifact（元数据行入 `artifacts`，字节入 `resources` 按
+  `content_hash` 去重，含 `run_id` / `code_version` / `params` 血缘，见 ADR-013）。
 
 ## 双通道（与 RAG 的边界）
 

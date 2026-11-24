@@ -27,7 +27,7 @@ Data 平台能力是 Chainlake 自有领域。
 | `data-engineering.md` | Notebook vs Pipeline、Compute、调度、执行安全 |
 | `visualization-and-artifacts.md` | Chart/Dive/Dashboard 三级模型、Intent→Compiler→ECharts |
 | `deployment-and-security.md` | Lite/Standard/Advanced 部署剖面、备份矩阵、密钥与升级 |
-| `decisions.md` | ADR-001…ADR-012（每个含 Context/Decision/Alternatives/Consequences/Status） |
+| `decisions.md` | ADR-001…ADR-019（ADR-012 被 ADR-012′ 取代；每条含 Context/Decision/Alternatives/Consequences/Status） |
 | `risk-register.md` | 可执行决策 / 待验证决策 / 技术·外部·安全·许可·部署风险 |
 | `../roadmap/community-data-agent-roadmap.md` | P0–P7 修订路线图 |
 | `../development/FORK.md`、`PATCHES.md` | 上游同步纪律与修改登记 |
@@ -41,8 +41,13 @@ Data 平台能力是 Chainlake 自有领域。
 - 网关层真实存在：`chainlake-gateway`（TS）：SLayer 客户端（pinned v1.5.0）、
   semantic models、connectors、agents（含 `slayer_query`）、`src/identity/` Auth Adapter
   （Logto provider + Zitadel provider，env 选择）。
-- SLayer 服务本体**不在任何仓库内**：仅 infra 有镜像引用
-  （`chainlake-slayer:latest`，ACR 私有仓库）。它是真实部署依赖，但源码/许可不在社区可控范围
-  ——见 `risk-register.md` R-EXT-01。
+- 语义层是**必需件**（ADR-012′/018），不再是可选件：候选为 Cube Core（Apache-2.0）与
+  SLayer/MotleyAI（MIT，0.7.x 预 1.0）。选型与拓扑（编译器 vs 取数入口）由 P0 spike 关闭，
+  见 `risk-register.md` P9–P12。
+- **本仓 Data Agent 实现量为零**：`grep -ri chainlake` / `grep -ri slayer` 在
+  `internal/`、`cmd/`、`frontend/src` 均无结果；P0 之前的资产只有文档与上游既有能力。
+- Resource Registry 上游**已实现**（`migrations/versioned/000069_resource_registry.up.sql`：
+  `resources` + `resource_bindings` + `resource_access_grants`），此前标 PROPOSED 属误标，已修正；
+  Artifact Registry 才需要新建（ADR-013）。
 - Jupyter（Server/Hub）、Go 原生 Connector、Catalog/Artifact 新表、Dive 相关表：
   **仓库中均不存在**，一律标 `PROPOSED`，不得当作既有能力引用。

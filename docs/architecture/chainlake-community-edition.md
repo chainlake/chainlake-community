@@ -21,7 +21,7 @@ Chainlake — From raw data to trusted insights.（母品牌 / 产品品牌）
 
 包含：Data Agent（含多智能体协作）、RAG/Knowledge（上游原样复用+挂接）、
 Data Catalog（含 Artifact Registry）、Data Engineering（notebook 即 pipeline+调度）、
-Data Visualization（Intent→ECharts+Dive+双编辑器）、Self-hosted 三档部署。
+Data Visualization（Intent→ECharts+Dive+双编辑器）、Self-hosted 单一完整剖面部署（ADR-012′）。
 
 禁区（本仓不得出现）：计费/订阅/用量计量、自助租户开通与试用流转、托管运维面、
 企业合规包（审计归档/KMS/DLP）、SaaS 形态白标。企业 seam 只预留接口。
@@ -52,4 +52,6 @@ Knowledge 与 Data 双通道；Notebook ≠ Pipeline；Intent→Compiler→EChar
 Redpanda Connect 核心 MIT+多数连接器 Apache-2.0、MPL-2.0 保留 notices）。
 排除嵌入：Sling GPL-3.0、Steampipe 核心 AGPL、Metabase AGPL、havn BSL（只看不抄；
 注意 hosted 竞品限制）。容器镜像许可逐个核实后方可发版（见风险登记 L1）。
+语义层候选：Cube Core（后端 Apache-2.0 / client MIT）、SLayer（MIT）；
+Wren AI 与 Sidemantic 均为 **AGPL-3.0**，只可借鉴设计，禁止嵌入（见风险登记 L5）。
 标注 PENDING 的项不得带着未验证假设进入实现。

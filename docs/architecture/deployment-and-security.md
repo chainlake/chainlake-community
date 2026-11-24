@@ -1,17 +1,21 @@
 # Deployment & Security
 
-状态：DECIDED（剖面与矩阵）/ 具体参数随 P7 落定。日期：2026-11-22。
+状态：DECIDED（剖面与矩阵）/ 具体参数随 P7 落定。日期：2026-11-22；修订：2026-11-24。
 
-## 部署剖面（按需启用，不强制全套）
+## 部署剖面：单一完整剖面（ADR-012′，取代 ADR-012）
 
-| 剖面 | 包含 | 适用 |
+Community 只有**一个剖面**：默认 `docker compose up` 起全部必需件，不提供
+Lite / Standard / Advanced 裁剪（语义层是必需件，Lite 的"单应用零依赖"形态不成立）。
+
+| 类别 | 组件 | 缺失时行为 |
 |---|---|---|
-| Lite | Chainlake App + PostgreSQL(ParadeDB) + Redis + DuckDB(in-process) + 对象存储（本地/MinIO二选一） | 最小自托管；完整 Agent + Knowledge 可用，**不需要** Jupyter/外部引擎 |
-| Standard | Lite + Jupyter Server（notebook 执行） + Asynq 周期调度 | 交互式数据工程；notebook 即 pipeline |
-| Advanced | Standard + 可选：Duckpad（交互备数）、Duckle（大吞吐/定时）、Spark/Flink Compute、Redpanda Connect（CDC/流）、外部向量库/图库/搜索引擎 | 重负载与企业级场景，按 sidecar 开关逐个启用 |
+| 必需 | Chainlake App(Go) + PostgreSQL(ParadeDB) + Redis + 对象存储（本地/MinIO 二选一）+ 语义层 sidecar（`SemanticCompiler`，见 ADR-018） | 启动自检失败、健康检查失败（不得带病启动） |
+| 必需（内嵌） | DuckDB（交互查询，随 App 进程内运行，不单独部署） | — |
+| 可选加速件 | Jupyter Server、Duckpad、Duckle、Spark/Flink Compute、Redpanda Connect（CDC/流）、外部向量库/图库/搜索引擎 | 不阻塞核心链路；对应 capability 置 false，前端入口隐藏 |
 
-原则：默认 `docker compose up` 只起 Lite；Standard/Advanced 为 profiles。
-Kubernetes（helm）镜像映射；任一 sidecar 缺失不得阻塞核心启动（健康检查分级）。
+原则：可选件通过 capability 暴露"是否就绪"，**不再用于裁剪基础功能**；
+SQLite 单机形态不支持 data platform 能力（整体 fail-closed）。
+Kubernetes（helm）按必需/可选两档做健康分级。
 
 ## 配置、密钥与持久卷
 
@@ -29,7 +33,7 @@ Kubernetes（helm）镜像映射；任一 sidecar 缺失不得阻塞核心启动
 | Redis（队列/会话） | 内存/AOF | 可重建（任务幂等），AOF 可选 | 文档说明 |
 | 对象存储（文件/产物） | MinIO/本地/S3 | 桶复制或卷备份 | P7 演练 |
 | notebook/pipeline 定义 | git 仓 | git 远端镜像 | 拉取即恢复 |
-| SLayer 模型库 | sidecar SQLite | 文件备份 | P7 演练 |
+| 语义模型定义 | workspace git 仓（Ossie 兼容 YAML，ADR-018） | git 远端镜像 | 拉取即恢复 |
 | 密钥 | 部署 secrets 管理 | 独立安全备份（禁入 git） | 轮换手册 |
 | 审计日志 | DB 表（保留策略） | 随库备份；归档到对象存储（企业版长期归档不在本仓） | 抽查 |
 
@@ -41,7 +45,9 @@ Kubernetes（helm）镜像映射；任一 sidecar 缺失不得阻塞核心启动
 ## 安全基线（摘要，细则见各域文档）
 
 默认 deny 出站（allowlist 放行）；密钥不进日志/cell/产物；写操作必审批；
-审计 append-only；默认关闭项：Docker 沙箱宿主挂载、公开注册、SSE 外网暴露。
+审计 append-only；默认关闭项：Docker 沙箱宿主挂载、公开注册、SSE 外网暴露、
+语义层的开发/无鉴权模式（`CUBEJS_DEV_MODE` 一类开关，启动自检检测到即拒绝启动）、
+供应商匿名使用统计。
 首次部署检查清单随 P7 输出。
 
 ## 附录：SaaS 多租户 Notebook（DEFERRED，不进社区实现）

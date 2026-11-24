@@ -1,16 +1,19 @@
 # System Architecture
 
-状态：DECIDED（结构）/ 各组件状态见表。日期：2026-11-22。
+状态：DECIDED（结构）/ 各组件状态见表。日期：2026-11-22；修订：2026-11-24。
+
+状态标签：`IMPLEMENTED` 可在本仓代码/迁移中验证 · `EXTERNAL` 位于其他仓或 SaaS 侧
+（本仓零引用、无法验证）· `PROPOSED` 未实现。**EXTERNAL 不得当作既有能力引用。**
 
 ## 系统图
 
 ```mermaid
 flowchart TB
     U[User / Agent Client] --> C[Chainlake App\nGo + Vue 3 + TDesign\n(IMPLEMENTED: WeKnora base)]
-    C --> IDP[(Logto OIDC\nAuth Adapter: gateway/src/identity/)]
-    C --> CAT[Resource Registry +\nData Catalog + Artifact Registry\n(PROPOSED, P0/P1)]
+    C --> IDP[(Logto OIDC\nCommunity: 本仓内置 OIDC 配置接入\nSaaS: gateway/src/identity/ EXTERNAL)]
+    C --> CAT[Resource Registry (IMPLEMENTED)\n+ Data Catalog / Artifact Registry\n(PROPOSED, P0)]
     C --> AGT[Agent Runtime\nReAct + ToolRegistry + Collaboration\n(IMPLEMENTED)]
-    AGT --> SL[SemanticCompiler → SLayer sidecar :5143\n(IMPLEMENTED client, EXTERNAL service)]
+    AGT --> SL[SemanticCompiler → 语义层 sidecar\n(EXTERNAL 服务；必需件，ADR-012′/018)]
     AGT --> ENG[Compute + Connectors\n(PROPOSED: Go native + RemoteConnector)]
     ENG --> DB[(User Databases\nPG/MySQL/ClickHouse...)]
     C --> NB[Jupyter Server sidecar\n(PROPOSED, P3)]
@@ -27,7 +30,8 @@ flowchart TB
 | Component | Existing Implementation | Responsibility | Status | Evidence |
 |---|---|---|---|---|
 | App Server | WeKnora Go (Gin) + Vue 3 SPA | REST API、会话、RAG 问答、Agent 编排 | IMPLEMENTED | `chainlake-community/cmd/server`, `internal/router/router.go:105`, `frontend/` |
-| Identity Adapter | gateway `src/identity/` (`types.ts` IdentityProvider, `logto-provider.ts`, `zitadel-provider.ts`, `index.ts` env 选择) | token 校验/discovery/JWKS/org 解析/成员 CRUD，按 provider 实现 | IMPLEMENTED | `chainlake-gateway/src/identity/types.ts:65-143`, `logto-provider.ts:196-247`, `index.ts:14-24` |
+| Identity Adapter（SaaS） | gateway `src/identity/` (`types.ts` IdentityProvider, `logto-provider.ts`, `zitadel-provider.ts`, `index.ts` env 选择) | token 校验/discovery/JWKS/org 解析/成员 CRUD，按 provider 实现 | EXTERNAL（SaaS 仓） | `chainlake-gateway/src/identity/types.ts:65-143`, `logto-provider.ts:196-247`, `index.ts:14-24` |
+| OIDC（本仓） | WeKnora 内置通用 OIDC（discovery / PKCE / userinfo mapping，`OIDC_AUTH_*` 环境变量） | **Community 登录路径**：Logto 经配置接入，不依赖网关 adapter | IMPLEMENTED | `internal/config/config.go:384-397,779-800`、`internal/handler/dto/auth.go:16` |
 | Tenant/Workspace | `types.Tenant` + `TenantMember` + 4 级 Role + Organization 跨租户共享 | workspace 建模、成员、角色 | IMPLEMENTED | `internal/types/tenant.go:86`, `tenant_member.go:16-32`, `organization.go:61` |
 | RBAC enforcement | role/ownership/share 三类 guard + fail-open 开关 | 路由级鉴权 | IMPLEMENTED | `internal/router/rbac.go:16-113`, `internal/middleware/rbac.go:68,215` |
 | AuthN | bcrypt + JWT 双 token；OIDC discovery/PKCE/JIT；capability API Key | 登录/注册/切换租户/刷新 | IMPLEMENTED | `application/service/user.go:161,306,483,543,1210`, `types/tenant_api_key.go:18` |
@@ -40,14 +44,20 @@ flowchart TB
 | Queues | Asynq 10 队列 + 6 worker 池；cron 目前只有 datasource scheduler 与 automation trigger | 后台任务 | IMPLEMENTED（周期调度为 PROPOSED 新活） | `types/task.go:31-88`, `datasource/scheduler.go:35-96` |
 | History | sessions/messages/artifacts（含版本） | 对话与执行存档 | IMPLEMENTED | `types/session.go:89`, `types/message.go:473`, `message_artifact.go:12` |
 | Storage | 8 后端抽象 + 租户绑定 + presigned 短链 | 文件存取 | IMPLEMENTED | `storageallowlist/allowlist.go:10`, `router/files.go:524-537` |
+| Resource Registry | `resources`（`content_hash`/`location_hash` 去重、handle、lifecycle/state）+ `resource_bindings`（owner_type/relation 引用计数）+ `resource_access_grants`（分享 token） | 资源身份、字节去重、引用计数 GC、分享/嵌入授权 | IMPLEMENTED | `migrations/versioned/000069_resource_registry.up.sql`、`application/service/resource.go:188,255,316,451` |
 | Audit | 通用 `audit_logs`（action/target/details JSONB） | 审计 | IMPLEMENTED | `migrations/versioned/000044_audit_log.up.sql` |
 | Secrets | login vault（AES-256-GCM，按用户）+ tenant JSONB 加密字段 | 凭证 | IMPLEMENTED（通用 secret 需适配器，PROPOSED） | `migrations/versioned/000136_credential_vault.up.sql` |
 | Sandbox | docker/e2b/cube 后端 + capability 门 + 网络策略 + SSRF guard | 隔离执行 | IMPLEMENTED | `sandbox/capabilities.go`, `types/sandbox_network_policy.go:22` |
-| SLayer client | TS BFF（dry_run/save/validate；方言映射 15 种；降级直连 SQL） | 语义编译调用 | IMPLEMENTED（client）；服务 EXTERNAL | `chainlake-gateway/src/api/slayer.ts`, `agents/slayer-convert.ts:85` |
-| Semantic models/connectors | gateway TS：models、relationships、connectors(registry) | 模型管理与连接 | IMPLEMENTED | `api/semantic-models.ts:52`, `connectors/connector.ts` |
-| Python connector svc | FastAPI（types/test/execute 只读）+ transforms/ssrf | 结构化执行（备选通道） | IMPLEMENTED | `chainlake-connector/src/chainlake_connector/main.py`, `server.py` |
+| 语义层 client（SemanticCompiler） | TS BFF（dry_run/save/validate；方言映射 15 种；降级直连 SQL） | 语义编译调用；选型与拓扑见 ADR-018 | EXTERNAL（本仓零引用） | `chainlake-gateway/src/api/slayer.ts`, `agents/slayer-convert.ts:85` |
+| Semantic models/connectors | gateway TS：models、relationships、connectors(registry) | 模型管理与连接 | EXTERNAL（SaaS 仓） | `api/semantic-models.ts:52`, `connectors/connector.ts` |
+| Python connector svc | FastAPI（types/test/execute 只读）+ transforms/ssrf | 结构化执行（备选通道） | EXTERNAL（另仓） | `chainlake-connector/src/chainlake_connector/main.py`, `server.py` |
 | Observability | OTel 自研 Langfuse exporter（无第三方 SDK）；审计保留策略 | 追踪 | IMPLEMENTED | `internal/tracing/langfuse/exporter.go` |
-| Jupyter/Compute/Catalog表/Dive/Notebook UI | — | — | PROPOSED（仓库中不存在） | 无（不得引用为既有） |
+| Jupyter/Compute/Catalog表/Artifact注册表/Dive/Notebook UI | — | — | PROPOSED（仓库中不存在） | 无（不得引用为既有） |
+
+注（2026-11-24）：标 `EXTERNAL` 的组件不在本仓，**本仓对其引用为零**
+（`grep -ri slayer`、`grep -ri chainlake` 在 `internal/`、`cmd/`、`frontend/src` 均无结果）。
+Community 身份路径是内置 OIDC，不是网关 Auth Adapter；`identity-and-authorization.md`
+中网关章节应读作 EXTERNAL 说明，待按本表修订。
 
 ## 域边界（4.1 摘要，详见各域文档）
 

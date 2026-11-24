@@ -32,8 +32,11 @@ const (
 	ToolDatabaseQuery       = "database_query"
 	ToolDataAnalysis        = "data_analysis"
 	ToolDataSchema          = "data_schema"
-	ToolWebSearch           = "web_search"
-	ToolWebFetch            = "web_fetch"
+	// ToolSaveChart persists a computed chart as a message artifact so the
+	// answer's figure survives the turn. See save_chart.go.
+	ToolSaveChart = "save_chart"
+	ToolWebSearch = "web_search"
+	ToolWebFetch  = "web_fetch"
 	// Unified reading: workspace access follows sandbox file capability;
 	// skill resources follow SkillsEnabled and do not require a sandbox.
 	// attachment:// is added whenever the session has stored attachments,
@@ -174,6 +177,7 @@ func AvailableToolDefinitions() []AvailableTool {
 		{Name: ToolWikiUpdateIssue, Label: "更新Wiki问题状态", Description: "更新特定的Wiki页面问题状态", Group: ToolGroupWikiIssue},
 		{Name: ToolDataAnalysis, Label: "数据分析", Description: "理解数据文件并进行数据分析", Group: ToolGroupData},
 		{Name: ToolDataSchema, Label: "查看数据元信息", Description: "获取表格文件的元信息", Group: ToolGroupData},
+		{Name: ToolSaveChart, Label: "保存图表", Description: "把已算好的数据渲染成图表并保存为可再次打开的产物", Group: ToolGroupData},
 	}
 }
 

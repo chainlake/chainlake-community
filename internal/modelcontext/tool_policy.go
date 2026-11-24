@@ -118,12 +118,17 @@ var toolHandlePolicies = map[string]toolHandlePolicy{
 	},
 	// data_analysis exposes the selected document as a fixed table name, so
 	// its SQL never carries a document handle; only knowledge_id is decoded.
+	// attachment_id is deliberately absent: it is the opaque att_... handle the
+	// attachment service resolves inside (tenant, session), not a source ID.
 	toolDataAnalysis: {
 		sourceIDKeys: map[string]struct{}{"knowledge_id": {}},
 	},
 	"data_schema": {
 		sourceIDKeys: map[string]struct{}{"knowledge_id": {}},
 	},
+	// save_chart takes aggregated numbers, never a document handle or SQL, and
+	// returns a filename. Nothing in its payload is a durable identity.
+	"save_chart": {},
 	"web_fetch": {
 		sourceIDKeys: map[string]struct{}{"url": {}, "urls": {}},
 		sourceOutput: true,

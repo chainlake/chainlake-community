@@ -79,6 +79,31 @@ func agentHasKnowledgeScope(config *types.AgentConfig) bool {
 	)
 }
 
+// sessionHasTabularAttachment reports whether this conversation holds a
+// CSV/Excel the user uploaded. Such a file is analysable on its own, so
+// data_analysis must survive the pure-agent-mode KB filter that would otherwise
+// drop it for having no knowledge base in scope.
+func (s *agentService) sessionHasTabularAttachment(ctx context.Context, sessionID string) bool {
+	if s.temporaryDocuments == nil || strings.TrimSpace(sessionID) == "" {
+		return false
+	}
+	tenantID, ok := types.TenantIDFromContext(ctx)
+	if !ok {
+		return false
+	}
+	documents, err := s.temporaryDocuments.List(ctx, tenantID, sessionID)
+	if err != nil {
+		logger.Warnf(ctx, "Failed to list conversation attachments for tool gating: %v", err)
+		return false
+	}
+	for _, document := range documents {
+		if document != nil && tools.IsTabularDataFile(document.FileType, document.FileName) {
+			return true
+		}
+	}
+	return false
+}
+
 // knowledgeBaseScopesForPrompt returns the KB IDs to show in runtime_context
 // metadata, together with the tenant each KB should be queried under.
 //
@@ -100,19 +125,22 @@ func knowledgeBaseScopesForPrompt(config *types.AgentConfig) ([]string, map[stri
 
 // agentService implements agent-related business logic
 type agentService struct {
-	browserSkill          *browserskill.Manager
-	userRepo              interfaces.UserRepository
-	graphRepo             interfaces.RetrieveGraphRepository
-	cfg                   *config.Config
-	modelService          interfaces.ModelService
-	mcpServiceService     interfaces.MCPServiceService
-	mcpManager            *mcp.MCPManager
-	eventBus              *event.EventBus
-	db                    *gorm.DB
-	webSearchService      interfaces.WebSearchService
-	knowledgeBaseService  interfaces.KnowledgeBaseService
-	knowledgeService      interfaces.KnowledgeService
-	fileService           interfaces.FileService
+	browserSkill         *browserskill.Manager
+	userRepo             interfaces.UserRepository
+	graphRepo            interfaces.RetrieveGraphRepository
+	cfg                  *config.Config
+	modelService         interfaces.ModelService
+	mcpServiceService    interfaces.MCPServiceService
+	mcpManager           *mcp.MCPManager
+	eventBus             *event.EventBus
+	db                   *gorm.DB
+	webSearchService     interfaces.WebSearchService
+	knowledgeBaseService interfaces.KnowledgeBaseService
+	knowledgeService     interfaces.KnowledgeService
+	fileService          interfaces.FileService
+	// temporaryDocuments resolves files the user attached to a conversation, so
+	// data_analysis can read an uploaded CSV/Excel that never entered a library.
+	temporaryDocuments    interfaces.TemporaryDocumentService
 	chunkService          interfaces.ChunkService
 	duckdb                *sql.DB
 	wikiPageService       interfaces.WikiPageService
@@ -187,6 +215,7 @@ func NewAgentService(
 	operationDispatcher *operations.HandlerDispatcher,
 	customAgentService interfaces.CustomAgentService,
 	collaboration *AgentCollaboration,
+	temporaryDocuments interfaces.TemporaryDocumentService,
 ) interfaces.AgentService {
 	svc := &agentService{
 		customAgentService:   customAgentService,
@@ -200,6 +229,7 @@ func NewAgentService(
 		knowledgeBaseService: knowledgeBaseService,
 		knowledgeService:     knowledgeService,
 		fileService:          fileService,
+		temporaryDocuments:   temporaryDocuments,
 		chunkService:         chunkService,
 		mcpServiceService:    mcpServiceService,
 		mcpManager:           mcpManager,
@@ -1341,6 +1371,9 @@ func (s *agentService) registerTools(
 	if !hasKnowledge {
 		filteredTools := make([]string, 0)
 		kbTools := map[string]bool{
+			// data_analysis is removed below as well, unless this conversation
+			// holds a CSV/Excel the user attached: that file is a source of its
+			// own and needs no knowledge base in scope.
 			tools.ToolSearchKnowledge:     true,
 			tools.ToolReadDocument:        true,
 			tools.ToolListDocuments:       true,
@@ -1358,6 +1391,10 @@ func (s *agentService) registerTools(
 			tools.ToolWikiDeletePage:  true,
 			tools.ToolWikiReadIssue:   true,
 			tools.ToolWikiUpdateIssue: true,
+		}
+
+		if s.sessionHasTabularAttachment(ctx, sessionID) {
+			delete(kbTools, tools.ToolDataAnalysis)
 		}
 
 		// If no knowledge and no web search, also disable todo_write (not useful for simple chat)
@@ -1548,13 +1585,18 @@ func (s *agentService) registerTools(
 
 		case tools.ToolDataAnalysis:
 			toolToRegister = tools.NewDataAnalysisTool(s.knowledgeBaseService, s.knowledgeService, s.tenantService, s.fileService, s.duckdb, sessionID, s.storageResolver).
-				WithSearchTargets(config.SearchTargets)
+				WithSearchTargets(config.SearchTargets).
+				WithTemporaryDocuments(s.temporaryDocuments)
 			logger.Infof(ctx, "Registered data_analysis tool for session: %s", sessionID)
 
 		case tools.ToolDataSchema:
 			toolToRegister = tools.NewDataSchemaTool(s.knowledgeService, s.chunkService.GetRepository()).
 				WithSearchTargets(config.SearchTargets)
 			logger.Infof(ctx, "Registered data_schema tool")
+
+		case tools.ToolSaveChart:
+			toolToRegister = tools.NewSaveChartTool(s.fileService, sessionID)
+			logger.Infof(ctx, "Registered save_chart tool for session: %s", sessionID)
 
 		// Wiki tools — only registered when wiki KBs are detected
 		case tools.ToolWikiReadPage:

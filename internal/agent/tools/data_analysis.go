@@ -40,7 +40,9 @@ var dataAnalysisTool = BaseTool{
 		"the same table and the source sheet name is exposed as a '__sheet_name' column so you can " +
 		"filter/aggregate per sheet. A legacy binary .xls is converted to .xlsx before it is read; " +
 		"if that conversion fails, re-save the workbook as .xlsx or export the sheet as .csv. " +
-		"If the user's question requires data statistics, convert the question into SQL and execute it.",
+		"If the user's question requires data statistics, convert the question into SQL and execute it. " +
+		"For a CSV/Excel the user attached to this conversation, pass its attachment_id " +
+		"(the attachment://att_... handle) instead of knowledge_id; one or the other is required.",
 	schema: utils.GenerateSchema[DataAnalysisInput](),
 }
 
@@ -177,8 +179,11 @@ func buildMissingColumnSuggestion(sqlErr error, schema *TableSchema) string {
 }
 
 type DataAnalysisInput struct {
-	KnowledgeID string `json:"knowledge_id" jsonschema:"doc://N document handle to query"`
-	SQL         string `json:"sql" jsonschema:"Read-only SELECT executed on the document. Reference the document as the table \"dataset\" (for example SELECT COUNT(*) FROM dataset); it is the only table available"` //nolint:lll // jsonschema tag
+	KnowledgeID string `json:"knowledge_id,omitempty" jsonschema:"doc://N document handle for a knowledge-base CSV/Excel document. Use this for library documents; for a file the user attached in this conversation use attachment_id instead"` //nolint:lll // jsonschema tag
+	// AttachmentID names a file the user uploaded into this conversation. It is
+	// the handle shown as attachment://att_..., and either spelling is accepted.
+	AttachmentID string `json:"attachment_id,omitempty" jsonschema:"attachment://N handle for a CSV/Excel file the user attached in this conversation. Pass exactly one of knowledge_id or attachment_id"`              //nolint:lll // jsonschema tag
+	SQL          string `json:"sql" jsonschema:"Read-only SELECT executed on the document. Reference the document as the table \"dataset\" (for example SELECT COUNT(*) FROM dataset); it is the only table available"` //nolint:lll // jsonschema tag
 }
 
 type DataAnalysisTool struct {
@@ -201,6 +206,19 @@ type DataAnalysisTool struct {
 	storageResolver interfaces.StorageBackendResolver
 	searchTargets   types.SearchTargets
 	scopeEnforced   bool
+	// temporaryDocuments resolves files the user attached to this conversation.
+	// Nil keeps the tool on knowledge-base documents only, which is what a
+	// deployment without the attachment store gets.
+	temporaryDocuments interfaces.TemporaryDocumentService
+}
+
+// WithTemporaryDocuments lets the tool read a CSV/Excel the user uploaded into
+// the current conversation, not just a knowledge-base document. Attachment
+// access is scoped by (tenant, session): the model passes a handle, never an
+// owner id, and the service refuses a handle from another conversation.
+func (t *DataAnalysisTool) WithTemporaryDocuments(docs interfaces.TemporaryDocumentService) *DataAnalysisTool {
+	t.temporaryDocuments = docs
+	return t
 }
 
 // WithSearchTargets enables the Agent-only authorization boundary. Other
@@ -298,19 +316,55 @@ func (t *DataAnalysisTool) Execute(ctx context.Context, args json.RawMessage) (*
 			Error:   fmt.Sprintf("Failed to parse input args: %v", err),
 		}, err
 	}
-	if t.scopeEnforced {
+	input.KnowledgeID = strings.TrimSpace(input.KnowledgeID)
+	input.AttachmentID = strings.TrimSpace(input.AttachmentID)
+	switch {
+	case input.KnowledgeID == "" && input.AttachmentID == "":
+		return &types.ToolResult{
+			Success: false,
+			Error: "Pass either knowledge_id (a knowledge-base document handle) or " +
+				"attachment_id (a CSV/Excel the user attached to this conversation).",
+		}, nil
+	case input.KnowledgeID != "" && input.AttachmentID != "":
+		return &types.ToolResult{
+			Success: false,
+			Error: "Pass only one source: knowledge_id for a knowledge-base document, " +
+				"attachment_id for a file the user attached.",
+		}, nil
+	}
+
+	// A conversation attachment is authorized by its own (tenant, session)
+	// scope inside the attachment service, so the knowledge-base search-target
+	// check does not apply to it.
+	if input.KnowledgeID != "" && t.scopeEnforced {
 		if _, err := authorizeKnowledgeInSearchTargets(ctx, t.searchTargets, input.KnowledgeID, t.knowledgeService); err != nil {
 			return &types.ToolResult{Success: false, Error: err.Error()}, err
 		}
 	}
 
-	schema, err := t.LoadFromKnowledgeID(ctx, input.KnowledgeID)
-	if err != nil {
-		logger.Errorf(ctx, "[Tool][DataAnalysis] Failed to load knowledge ID '%s': %v", input.KnowledgeID, err)
-		return &types.ToolResult{
-			Success: false,
-			Error:   fmt.Sprintf("Failed to load knowledge ID '%s': %v", input.KnowledgeID, err),
-		}, err
+	var (
+		schema *TableSchema
+		err    error
+	)
+	if input.AttachmentID != "" {
+		schema, err = t.LoadFromAttachment(ctx, input.AttachmentID)
+		if err != nil {
+			logger.Warnf(ctx, "[Tool][DataAnalysis] Failed to load attachment '%s': %v",
+				input.AttachmentID, err)
+			return &types.ToolResult{
+				Success: false,
+				Error:   fmt.Sprintf("Failed to load attachment '%s': %v", input.AttachmentID, err),
+			}, nil
+		}
+	} else {
+		schema, err = t.LoadFromKnowledgeID(ctx, input.KnowledgeID)
+		if err != nil {
+			logger.Errorf(ctx, "[Tool][DataAnalysis] Failed to load knowledge ID '%s': %v", input.KnowledgeID, err)
+			return &types.ToolResult{
+				Success: false,
+				Error:   fmt.Sprintf("Failed to load knowledge ID '%s': %v", input.KnowledgeID, err),
+			}, err
+		}
 	}
 
 	if rewrittenSQL, fixes := reconcileSQLColumnsWithSchema(input.SQL, schema); len(fixes) > 0 {
@@ -408,7 +462,8 @@ func validateDataAnalysisSQL(sqlQuery string, schema *TableSchema) error {
 		if validationErr.Type == "table_not_allowed" {
 			return fmt.Errorf(
 				"SQL validation failed: %s. The selected document is exposed as the single table %q; "+
-					"write the query against that table name and pass the document only through knowledge_id",
+					"write the query against that table name and pass the document only through "+
+					"knowledge_id or attachment_id",
 				validationErr.Message, DataAnalysisTableName,
 			)
 		}
@@ -880,10 +935,26 @@ func (t *DataAnalysisTool) materializeKnowledgeFile(ctx context.Context, knowled
 	}
 	defer reader.Close()
 
-	// Preserve the file extension so DuckDB's format auto-detection still
-	// works (e.g. the CSV reader expects .csv, xlsx reader expects .xlsx).
+	path, cleanup, err := t.materializeToTempFile(ctx, reader, knowledge.FileType,
+		"knowledge '"+knowledge.ID+"'")
+	if err != nil {
+		return "", noop, err
+	}
+	logger.Infof(ctx, "[Tool][DataAnalysis] Materialized knowledge '%s' to temp file %s for session %s",
+		knowledge.ID, path, t.sessionID)
+	return path, cleanup, nil
+}
+
+// materializeToTempFile copies a stored blob into a fresh temp file so DuckDB
+// can open it with ordinary path semantics. The extension is preserved because
+// DuckDB's readers key off it (CSV vs XLSX). label only appears in errors.
+func (t *DataAnalysisTool) materializeToTempFile(
+	ctx context.Context, reader io.Reader, fileType, label string,
+) (string, func(), error) {
+	noop := func() {}
+
 	suffix := ""
-	if ext := strings.ToLower(strings.TrimSpace(knowledge.FileType)); ext != "" {
+	if ext := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(fileType), ".")); ext != "" {
 		suffix = "." + ext
 	}
 
@@ -903,17 +974,93 @@ func (t *DataAnalysisTool) materializeKnowledgeFile(ctx context.Context, knowled
 	if _, err := io.Copy(tmp, materializationReader{ctx: ctx, reader: reader}); err != nil {
 		_ = tmp.Close()
 		cleanup()
-		return "", noop, fmt.Errorf("failed to copy knowledge '%s' to temp file: %w", knowledge.ID, err)
+		return "", noop, fmt.Errorf("failed to copy %s to temp file: %w", label, err)
 	}
 	if err := tmp.Close(); err != nil {
 		cleanup()
-		return "", noop, fmt.Errorf("failed to finalize temp file for knowledge '%s': %w", knowledge.ID, err)
+		return "", noop, fmt.Errorf("failed to finalize temp file for %s: %w", label, err)
+	}
+	return tmpPath, cleanup, nil
+}
+
+// IsTabularDataFile reports whether data_analysis can load a file: CSV or
+// Excel. Stored attachments occasionally carry an empty FileType, in which case
+// the extension of the file name decides.
+func IsTabularDataFile(fileType, fileName string) bool {
+	switch normalizeDataFileType(fileType, fileName) {
+	case "csv", "xlsx", "xls":
+		return true
+	}
+	return false
+}
+
+func normalizeDataFileType(fileType, fileName string) string {
+	ext := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(fileType), "."))
+	if ext != "" {
+		return ext
+	}
+	return strings.ToLower(strings.TrimPrefix(filepath.Ext(strings.TrimSpace(fileName)), "."))
+}
+
+// LoadFromAttachment loads a CSV/Excel the user attached to this conversation.
+// The handle is scoped to (tenant, session): a handle from another conversation
+// resolves to nothing rather than to that conversation's file.
+func (t *DataAnalysisTool) LoadFromAttachment(ctx context.Context, attachmentID string) (*TableSchema, error) {
+	if t.temporaryDocuments == nil {
+		return nil, fmt.Errorf("attachments are unavailable in this deployment; " +
+			"ask the user to add the file to a knowledge base instead")
+	}
+	tenantID, ok := types.TenantIDFromContext(ctx)
+	if !ok {
+		return nil, fmt.Errorf("missing tenant context")
 	}
 
-	logger.Infof(ctx, "[Tool][DataAnalysis] Materialized knowledge '%s' to temp file %s for session %s",
-		knowledge.ID, tmpPath, t.sessionID)
+	id := strings.TrimSpace(attachmentID)
+	if id == "" {
+		return nil, fmt.Errorf("attachment handle is empty")
+	}
 
-	return tmpPath, cleanup, nil
+	doc, err := t.temporaryDocuments.ResolveHandle(ctx, tenantID, t.sessionID, id)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve attachment %s: %w", id, err)
+	}
+	if doc == nil {
+		return nil, fmt.Errorf("attachment %s was not found in this conversation", id)
+	}
+	id = doc.ID
+
+	fileType := normalizeDataFileType(doc.FileType, doc.FileName)
+	if fileType == "" {
+		return nil, fmt.Errorf("attachment %q has no file type; data analysis reads csv, xlsx or xls",
+			doc.FileName)
+	}
+	if !IsTabularDataFile(fileType, doc.FileName) {
+		return nil, fmt.Errorf("attachment %q is a %s file; data analysis reads csv, xlsx or xls only",
+			doc.FileName, fileType)
+	}
+
+	reader, _, err := t.temporaryDocuments.OpenFile(ctx, tenantID, t.sessionID, id)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open attachment %q: %w", doc.FileName, err)
+	}
+	defer func() { _ = reader.Close() }()
+
+	localPath, cleanup, err := t.materializeToTempFile(ctx, reader, fileType,
+		"attachment '"+doc.FileName+"'")
+	if err != nil {
+		return nil, err
+	}
+	defer cleanup()
+
+	tableName := "a_" + strings.ReplaceAll(doc.ID, "-", "_")
+	logger.Infof(ctx,
+		"[Tool][DataAnalysis] Loading attachment '%s' (type: %s) into table '%s' for session %s",
+		doc.ID, fileType, tableName, t.sessionID)
+
+	if fileType == "csv" {
+		return t.LoadFromCSV(ctx, localPath, tableName)
+	}
+	return t.LoadFromExcel(ctx, localPath, tableName)
 }
 
 type materializationReader struct {

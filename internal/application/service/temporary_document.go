@@ -203,6 +203,54 @@ func (s *temporaryDocumentService) Get(ctx context.Context, tenantID uint64, ses
 	return s.resolveInSession(ctx, tenantID, sessionID, documentID)
 }
 
+// ResolveHandle turns the opaque handle a model was shown back into a document
+// of this conversation. The handle is a hash of the document ID, so the ID
+// cannot be recovered from it directly: it is looked up in what this session
+// was shown (message attachments), then in the session's stored documents.
+func (s *temporaryDocumentService) ResolveHandle(
+	ctx context.Context, tenantID uint64, sessionID, handle string,
+) (*types.TemporaryDocument, error) {
+	ref := strings.TrimSpace(handle)
+	ref = strings.TrimPrefix(ref, types.AttachmentPathScheme)
+	ref = strings.TrimPrefix(ref, "attachment:")
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return nil, nil
+	}
+
+	// A plain document ID (and a fork referencing a parent document by ID)
+	// still resolves through the ordinary scoped lookup.
+	if document, err := s.resolveInSession(ctx, tenantID, sessionID, ref); err != nil || document != nil {
+		return document, err
+	}
+	if !strings.HasPrefix(ref, "att_") {
+		return nil, nil
+	}
+
+	if s.sessionAttachments != nil {
+		attachments, err := s.sessionAttachments.GetSessionAttachments(ctx, sessionID)
+		if err != nil {
+			return nil, fmt.Errorf("resolve attachment handle: %w", err)
+		}
+		for _, attachment := range attachments {
+			if types.AttachmentHandle(attachment.ID) == ref {
+				return s.resolveInSession(ctx, tenantID, sessionID, attachment.ID)
+			}
+		}
+	}
+
+	documents, err := s.repo.ListScoped(ctx, tenantID, sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("list attachments for handle %s: %w", ref, err)
+	}
+	for _, document := range documents {
+		if document != nil && types.AttachmentHandle(document.ID) == ref {
+			return document, nil
+		}
+	}
+	return nil, nil
+}
+
 func (s *temporaryDocumentService) OpenFile(ctx context.Context, tenantID uint64, sessionID, documentID string) (io.ReadCloser, string, error) {
 	document, err := s.resolveInSession(ctx, tenantID, sessionID, documentID)
 	if err != nil {

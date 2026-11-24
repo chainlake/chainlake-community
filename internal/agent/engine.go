@@ -100,8 +100,12 @@ type AgentEngine struct {
 	// collaborationOnlySuspension limits suspension to collaboration waits.
 	collaborationOnlySuspension bool
 	// mode: whether the client renders prompt cards and can answer them.
-	mode     types.RunMode
-	progress turnProgress
+	mode types.RunMode
+	// turnArtifacts collects files tools persisted themselves (save_chart and
+	// friends). The engine is built per turn, so this never outlives the
+	// message it is attached to.
+	turnArtifacts types.MessageArtifacts
+	progress      turnProgress
 	// Hold speculative parent prose until delegated work has been reviewed.
 	holdCollaborationAnswer bool
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"math/rand"
+	"slices"
 	"strings"
 	"time"
 
@@ -23,6 +24,30 @@ var (
 	ErrCannotDeleteBuiltin = errors.New("cannot delete built-in agent")
 	ErrAgentNameRequired   = errors.New("agent name is required")
 )
+
+// builtinToolRollout lists tools a platform release added to a built-in agent's
+// shipped allowlist. A tenant that customized that agent has a stored row which
+// shadows the YAML, so without this it would never see the new tool.
+//
+// Adding is the only operation: an operator who removed some other tool keeps
+// that removal, and an empty or nil allowlist is left alone because "cleared on
+// purpose" and "never set" are indistinguishable there.
+var builtinToolRollout = map[string][]string{
+	types.BuiltinDataAnalystID: {tools.ToolSaveChart},
+}
+
+// applyBuiltinToolRollout folds the shipped additions into a stored built-in
+// agent for this read only; nothing is written back until the tenant saves.
+func applyBuiltinToolRollout(agent *types.CustomAgent) {
+	if agent == nil || len(agent.Config.AllowedTools) == 0 {
+		return
+	}
+	for _, name := range builtinToolRollout[agent.ID] {
+		if !slices.Contains(agent.Config.AllowedTools, name) {
+			agent.Config.AllowedTools = append(agent.Config.AllowedTools, name)
+		}
+	}
+}
 
 const (
 	// suggestionDefaultLimit is the fallback count when neither the caller nor
@@ -144,6 +169,7 @@ func (s *customAgentService) GetAgentByID(ctx context.Context, id string) (*type
 		agent, err := s.repo.GetAgentByID(ctx, id, tenantID)
 		if err == nil {
 			// Found in database, overlay locale-specific name/description/avatar
+			applyBuiltinToolRollout(agent)
 			agent.EnsureDefaults()
 			types.ApplyBuiltinAgentLocalization(ctx, agent)
 			return agent, nil
@@ -206,6 +232,7 @@ func (s *customAgentService) ListAgents(ctx context.Context) ([]*types.CustomAge
 	// Track which built-in agents exist in database
 	builtinInDB := make(map[string]bool)
 	for _, agent := range allAgents {
+		applyBuiltinToolRollout(agent)
 		agent.EnsureDefaults()
 		if types.IsBuiltinAgentID(agent.ID) {
 			builtinInDB[agent.ID] = true

@@ -3,6 +3,12 @@
 状态：DECIDED（阶段划分与依赖）/ 每阶段启动前确认 PENDING 关闭情况。日期：2026-11-22。
 总纲与架构见 `../architecture/chainlake-community-edition.md` 及 `../architecture/`。
 
+修订（2026-11-24）：阶段划分不变，以下四点按新 ADR 调整——
+① 部署只有单一完整剖面（ADR-012′），不再有 Lite/Standard/Advanced；
+② P0 交付物增加 `artifacts` 表与独立迁移轨（ADR-013/014），data platform 表只做 PostgreSQL；
+③ 语义层为必需件，P0 需先关闭 `risk-register` 的 P8–P12（ADR-018）；
+④ P3 的周期触发器改为"抽取 automation 调度内核"，不是新建（见 `data-engineering.md`）。
+
 阶段组织：1 架构决策 → 2 基础平台 → 3 核心实现 → 4 Agent 能力 →
 5 高级集成 → 6 生产就绪。技术只在被需要时引入；任一阶段可独立测试交付。
 
@@ -27,7 +33,7 @@
   SemanticCompiler 接口 + SLayer adapter（通路验证）；Jupyter Server 设计定稿。
   排除：notebook UI、Agent、调度触发器。
 - Dependencies：P0（catalog/artifact/密钥模型）。
-- Deliverables：compute/connectors/安全层代码；SLayer 编译通路；Jupyter 设计文档。
+- Deliverables：compute/connectors/安全层代码；`SemanticCompiler` 编译通路（ADR-018）；Jupyter 设计文档。
 - Acceptance criteria：同查询双引擎执行+审计；非法 SQL 被拒；kernel/Jupyter 设计评审通过；
   SLayer dry-run 通；P3/P4 的 PENDING（凭证表、级联清单、Jupyter 设计）关闭。
 - Upstream conflict risk：低（新文件 + `container.go` 注册行）。
@@ -50,8 +56,9 @@
 
 - Objective：notebook 可写可跑；pipeline 可定义可执行可调度。
 - Scope：自研 Vue notebook UI（Jupyter 协议、语言下拉、TDesign 表格、Compute attach）；
-  Pipeline Model（定义存 git）+ Papermill/nbclient 执行器；Asynq 通用周期触发器（新增）
-  + `notebook:run` 队列；notebook↔pipeline 互调。排除：Agent 编排、可视化。
+  Pipeline Model（定义存 git）+ Papermill/nbclient 执行器；通用 `Schedule/Run` 服务
+  （抽自 `application/service/automation_scheduler.go`，**非新建**）+ `notebook:run` 队列；
+  notebook↔pipeline 互调。排除：Agent 编排、可视化。
 - Dependencies：P1（Compute/Jupyter 设计/安全）。
 - Deliverables：Data Studio UI；pipeline 定义与执行器；调度底座与 run 记录。
 - Acceptance criteria：语言切换/`%sql` 富表格可用；定时 notebook 产出版本化产物；
@@ -80,7 +87,7 @@
   `chart_catalog`/`save_dive`；dives/dashboards 表与版本；chart 卡 + Dive 查看器
   （过滤/下钻/分享/嵌入）+ Chart Editor + Dashboard Editor（布局库选型时核许可）。
   排除：可写回 App（延后）、第二渲染引擎。
-- Dependencies：P1（SLayer 编译）、P3（artifact 链）。
+- Dependencies：P1（`SemanticCompiler` 编译）、P3（artifact 链）。
 - Deliverables：Spec+模板库+双编辑器+分享/嵌入。
 - Acceptance criteria：12 种图全链路生成；校验失败 Agent 自修复；
   同一 Dive 建/改/回滚；嵌入页鉴权有效。
@@ -102,7 +109,7 @@
 ## P7 — Production Readiness（生产就绪）
 
 - Objective：可部署、可备份、可升级、可同步。
-- Scope：三档部署矩阵与参数；密钥轮换；加固复审；备份恢复演练；
+- Scope：单一完整剖面部署矩阵与可选件参数（ADR-012′）；密钥轮换；加固复审；备份恢复演练；
   Asynq 负载验证（备选 K8s CronJob）；上游同步 SOP 常态化。
 - Dependencies：P0–P6。
 - Deliverables：部署矩阵文档；加固报告；备份恢复演练记录；同步 SOP。
